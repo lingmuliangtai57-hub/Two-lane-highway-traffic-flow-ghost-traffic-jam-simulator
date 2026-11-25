@@ -1,0 +1,2293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2車線高速道路 交通流・幽霊渋滞シミュレーター</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background-color: #020617;
+      color: #f1f5f9;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+
+    /* カスタムレンジスライダー（つまみ直径 16px = 半径 8px） */
+    input[type="range"].sim-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      border-radius: 9999px;
+      background: #1e293b;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type="range"].sim-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      border: 2px solid #0f172a;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
+      transition: transform 0.1s ease, background-color 0.15s ease;
+    }
+    input[type="range"].sim-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.12);
+      background: #7dd3fc;
+    }
+    input[type="range"].sim-slider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      border: 2px solid #0f172a;
+      box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.35);
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body class="min-h-screen lg:h-screen overflow-y-auto lg:overflow-hidden flex flex-col lg:flex-row bg-slate-950 text-slate-100 font-sans antialiased selection:bg-sky-500/30 selection:text-sky-200">
+
+  <!-- トースト通知コンテナ（alert代替） -->
+  <div id="toastContainer" class="fixed bottom-4 left-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- =====================================================================
+       左ペイン：メイン可視化・分析エリア（可変幅）
+       ===================================================================== -->
+  <main class="flex-1 min-w-0 flex flex-col lg:h-full bg-slate-950 border-b lg:border-b-0 lg:border-r border-slate-800">
+
+    <!-- 1. トップヘッダー（実行制御・速度・経過時間） -->
+    <header class="px-3 sm:px-4 py-2 bg-slate-900/95 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+      <div class="flex items-center gap-2">
+        <div class="w-2.5 h-2.5 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.85)]"></div>
+        <h1 class="text-sm sm:text-base font-bold tracking-tight text-slate-100">
+          2車線高速道路 交通流・幽霊渋滞シミュレーター
+        </h1>
+        <span id="simStatusBadge" class="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+          一時停止中
+        </span>
+      </div>
+
+      <!-- 実行操作・再生速度・経過時間＆ステップ表示 -->
+      <div class="flex flex-wrap items-center gap-1.5">
+        <button id="btnPlayPause" class="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 active:bg-sky-600 text-slate-950 font-bold text-xs transition flex items-center gap-1.5 cursor-pointer shadow-sm">
+          <span id="playPauseIcon">▶</span>
+          <span id="playPauseText">再生</span>
+        </button>
+
+        <button id="btnStep" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-200 border border-slate-700 text-xs font-medium transition cursor-pointer" title="1ステップ (0.35秒) 進める">
+          +1 Step
+        </button>
+
+        <button id="btnSameSeedReset" class="px-2.5 py-1.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 text-xs font-medium transition cursor-pointer" title="現在の乱数シードを維持して初期配置へ戻す">
+          同シードリセット
+        </button>
+
+        <button id="btnNewSeedReset" class="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-200 border border-slate-700 text-xs font-medium transition cursor-pointer" title="新しい乱数シードを生成してリセット">
+          新規シード実行
+        </button>
+
+        <!-- 再生速度セレクタ（×1, ×3, ×10, ×30, MAX） -->
+        <div class="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800 ml-0.5" role="group" aria-label="再生速度">
+          <button data-speed="1" class="speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer">×1</button>
+          <button data-speed="3" class="speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer">×3</button>
+          <button data-speed="10" class="speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 transition cursor-pointer">×10</button>
+          <button data-speed="30" class="speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer">×30</button>
+          <button data-speed="MAX" class="speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer">MAX</button>
+        </div>
+
+        <!-- 経過時間・ステップ表示 -->
+        <div class="px-2.5 py-1 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs flex items-center gap-1.5">
+          <span class="text-slate-400">時間:</span>
+          <span id="metricTime" class="font-bold text-sky-300">0.00 s</span>
+          <span id="metricStep" class="text-slate-400">(0 st)</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2. 評価指標（KPI）ダッシュボード＆有効滞在補正内訳 -->
+    <section class="px-3 sm:px-4 py-2 bg-slate-900/50 border-b border-slate-800/80 flex flex-col gap-1.5 shrink-0">
+      <div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2">
+        <!-- ① フロー効率 F -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">フロー効率 F</span>
+            <span id="kpiFinalBadge" class="hidden px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9.5px] font-bold">確定</span>
+          </div>
+          <div class="flex items-baseline justify-between mt-0.5">
+            <span id="metricFlow" class="text-lg font-mono font-bold text-emerald-400">0.0000</span>
+            <span class="text-[9.5px] font-mono text-slate-500">有効滞在補正</span>
+          </div>
+        </div>
+
+        <!-- ② 停止秒数平均 -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">停止秒数平均</span>
+            <span class="text-[9.5px] font-mono text-slate-500">v≤0.1</span>
+          </div>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="metricAvgStop" class="text-lg font-mono font-bold text-amber-400">0.00</span>
+            <span class="text-xs text-slate-400 font-mono">s/台</span>
+          </div>
+        </div>
+
+        <!-- ③ 総停止秒数 -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">総停止秒数</span>
+            <span class="text-[9.5px] font-mono text-slate-500">0≤x&lt;到着</span>
+          </div>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="metricTotalStop" class="text-lg font-mono font-bold text-orange-400">0.00</span>
+            <span class="text-xs text-slate-400 font-mono">s</span>
+          </div>
+        </div>
+
+        <!-- ④ 衝突回数 -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">衝突回数 (4m)</span>
+            <span class="text-[9.5px] font-mono text-slate-500">0≤x&lt;到着</span>
+          </div>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="metricCollisions" class="text-lg font-mono font-bold text-rose-400">0</span>
+            <span class="text-xs text-slate-400 font-mono">回</span>
+          </div>
+        </div>
+
+        <!-- ⑤ 車線変更回数（1→2 / 2→1 双方向内訳表示） -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">車線変更回数</span>
+            <span id="metricLaneChangeBreakdown" class="text-[9.5px] font-mono text-sky-300 font-semibold">1→2:0 / 2→1:0</span>
+          </div>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="metricLaneChanges" class="text-lg font-mono font-bold text-sky-400">0</span>
+            <span class="text-xs text-slate-400 font-mono">回</span>
+          </div>
+        </div>
+
+        <!-- ⑥ 未到着 / 総台数 -->
+        <div class="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-[11px] font-medium text-slate-400">未到着 / 総台数</span>
+            <span id="loopIndicatorTag" class="hidden text-[9.5px] font-mono text-cyan-400">周回描写中</span>
+          </div>
+          <div class="flex items-baseline gap-1 mt-0.5">
+            <span id="metricActiveCars" class="text-lg font-mono font-bold text-slate-100">50</span>
+            <span id="metricTotalCars" class="text-xs text-slate-400 font-mono">/ 50 台</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- フロー効率内訳＆到達基準時間サブバー -->
+      <div class="px-3 py-1 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] font-mono text-slate-300">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span class="text-slate-400 font-sans font-semibold">有効滞在補正内訳:</span>
+          <span>速度合計 Sv = <strong id="detailSv" class="text-emerald-300">0.0</strong> m/s</span>
+          <span>有効滞在ステップ = <strong id="detailValidSteps" class="text-sky-300">0</strong> st</span>
+          <span class="text-slate-500">(F = Sv / (有効滞在st × 23))</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span>1100m基準時間: <strong id="detailTime1100" class="text-slate-200">--</strong></span>
+          <span>先頭到達時間 C: <strong id="detailTimeLead" class="text-amber-300">--</strong></span>
+          <span>全車移動時間: <strong id="detailTimeAll" class="text-cyan-300">--</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. メイン可視化＆分析タブエリア -->
+    <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+      <!-- タブナビゲーション -->
+      <nav class="px-3 sm:px-4 pt-1.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0" aria-label="可視化・ログタブ">
+        <div class="flex flex-wrap items-center gap-1">
+          <button data-tab="road" class="tab-btn px-3 py-1.5 rounded-t-xl text-xs font-bold bg-slate-900 text-sky-400 border-t border-x border-slate-800 -mb-px cursor-pointer transition">
+            2車線道路ビュー
+          </button>
+          <button data-tab="timespace" class="tab-btn px-3 py-1.5 rounded-t-xl text-xs font-medium text-slate-400 hover:text-slate-200 cursor-pointer transition">
+            時空図 (Time-Space)
+          </button>
+          <button data-tab="timeseries" class="tab-btn px-3 py-1.5 rounded-t-xl text-xs font-medium text-slate-400 hover:text-slate-200 cursor-pointer transition">
+            時系列グラフ
+          </button>
+          <button data-tab="events" class="tab-btn px-3 py-1.5 rounded-t-xl text-xs font-medium text-slate-400 hover:text-slate-200 cursor-pointer transition flex items-center gap-1.5">
+            <span>イベントタイムライン</span>
+            <span id="tabEventCount" class="px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 font-mono text-[10px]">0</span>
+          </button>
+          <button data-tab="records" class="tab-btn px-3 py-1.5 rounded-t-xl text-xs font-medium text-slate-400 hover:text-slate-200 cursor-pointer transition flex items-center gap-1.5">
+            <span>実験結果レコード</span>
+            <span id="tabRecordCount" class="px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300 font-mono text-[10px]">0</span>
+          </button>
+        </div>
+        <span class="text-[11px] font-mono text-slate-500 hidden xl:inline">上側: 第1車線(奇数ID) / 下側: 第2車線(偶数ID)</span>
+      </nav>
+
+      <!-- タブパネルコンテナ -->
+      <div class="flex-1 min-h-0 bg-slate-900/35 p-2.5 sm:p-3 flex flex-col overflow-hidden">
+
+        <!-- [タブ1] 2車線道路ビュー（7段折り返し＋ゴール到達後周回描画） -->
+        <section id="panel-road" class="tab-panel flex-1 min-h-0 flex flex-col gap-2">
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <span id="roadRangeTitle" class="font-bold text-slate-200">2車線高速道路 (-2,500m 〜 6,664m / 7段折り返し)</span>
+            <div class="flex flex-wrap items-center gap-3 text-[11px] text-slate-300">
+              <span class="flex items-center gap-1"><span class="inline-block w-0.5 h-3 bg-cyan-400"></span>0m START</span>
+              <span class="flex items-center gap-1"><span class="inline-block w-3 h-2 rounded-xs bg-[#ef4444]"></span>1台目(赤)</span>
+              <span class="flex items-center gap-1"><span class="inline-block w-3 h-2 rounded-xs bg-emerald-400"></span>後続車両(4m)</span>
+              <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-full bg-cyan-300 border border-slate-950"></span>ゴール到達済(周回)</span>
+              <span class="flex items-center gap-1"><span class="text-amber-400 font-bold">▼/▲</span>ウインカー(2.8s)</span>
+              <span class="flex items-center gap-1"><span class="text-rose-400 font-bold">((</span>緊急ブレーキ</span>
+            </div>
+          </div>
+
+          <div class="flex-1 min-h-[260px] w-full rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 relative shadow-inner">
+            <canvas id="roadCanvas" class="w-full h-full cursor-crosshair"></canvas>
+          </div>
+
+          <!-- 車両インスペクターバー -->
+          <div class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <div id="inspectorContent" class="flex flex-wrap items-center gap-x-3.5 gap-y-0.5 font-mono text-[11px] text-slate-300">
+              <span class="text-slate-400 font-sans">💡 道路上の車両にマウスを合わせるかクリックすると個体ステータス（ID・車線・位置・速度・加速度・累積停止時間）を表示します。</span>
+            </div>
+            <button id="btnClearInspect" class="hidden px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-300 border border-slate-700 cursor-pointer">
+              選択解除
+            </button>
+          </div>
+        </section>
+
+        <!-- [タブ2] 時空図 (Time-Space Diagram) -->
+        <section id="panel-timespace" class="tab-panel hidden flex-1 min-h-0 flex flex-col gap-2">
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-bold text-slate-200">時空図 (Time-Space Diagram)</span>
+              <!-- 車線フィルタ（全車線 / 第1車線 / 第2車線） -->
+              <div class="flex items-center bg-slate-950 p-0.5 rounded-xl border border-slate-800 text-[11px]" role="group" aria-label="時空図車線フィルタ">
+                <button data-ts-lane="all" class="ts-lane-btn px-2 py-0.5 rounded-lg font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 cursor-pointer">全車線</button>
+                <button data-ts-lane="1" class="ts-lane-btn px-2 py-0.5 rounded-lg font-semibold text-slate-400 hover:text-slate-200 cursor-pointer">第1車線</button>
+                <button data-ts-lane="2" class="ts-lane-btn px-2 py-0.5 rounded-lg font-semibold text-slate-400 hover:text-slate-200 cursor-pointer">第2車線</button>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 text-[11px] font-mono">
+              <span class="text-rose-400">0 m/s</span>
+              <div class="w-24 h-2 rounded-full" style="background: linear-gradient(90deg, #ef4444 0%, #eab308 50%, #22c55e 100%);"></div>
+              <span class="text-emerald-400">23 m/s</span>
+            </div>
+          </div>
+          <div class="flex-1 min-h-[260px] w-full rounded-2xl overflow-hidden border border-slate-800 bg-slate-950">
+            <canvas id="timeSpaceCanvas" class="w-full h-full"></canvas>
+          </div>
+        </section>
+
+        <!-- [タブ3] 時系列グラフ（速度・停止秒数） -->
+        <section id="panel-timeseries" class="tab-panel hidden flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 gap-2.5">
+          <div class="min-h-[220px] rounded-2xl border border-slate-800 bg-slate-950 p-2.5 flex flex-col">
+            <div class="flex items-center justify-between px-1 pb-1 text-xs shrink-0">
+              <span class="font-bold text-sky-400">観測区間内 平均速度の推移 [m/s]</span>
+              <span class="font-mono text-[10.5px] text-slate-400">0 ≤ x &lt; 到着点</span>
+            </div>
+            <div class="flex-1 min-h-0 w-full">
+              <canvas id="speedSeriesCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+
+          <div class="min-h-[220px] rounded-2xl border border-slate-800 bg-slate-950 p-2.5 flex flex-col">
+            <div class="flex items-center justify-between px-1 pb-1 text-xs shrink-0">
+              <span class="font-bold text-amber-400">観測区間内 累積平均停止秒数 [s/台]</span>
+              <span class="font-mono text-[10.5px] text-slate-400">v ≤ 0.1 m/s</span>
+            </div>
+            <div class="flex-1 min-h-0 w-full">
+              <canvas id="stopSeriesCanvas" class="w-full h-full"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- [タブ4] 車両イベントタイムライン（最新200件表示） -->
+        <section id="panel-events" class="tab-panel hidden flex-1 min-h-0 flex flex-col rounded-2xl border border-slate-800 bg-slate-950 overflow-hidden">
+          <div class="px-3.5 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs shrink-0">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-slate-200">車両イベントタイムライン（最新200件）</span>
+              <span id="eventDirectionSummary" class="font-mono text-[11px] text-sky-300">1→2: 0回 / 2→1: 0回</span>
+            </div>
+            <span id="eventCountBadge" class="font-mono text-[11px] text-slate-400">0 件</span>
+          </div>
+          <div id="eventLogList" class="flex-1 overflow-y-auto p-2.5 space-y-1.5 font-mono text-[11.5px]">
+            <div class="text-slate-500 text-center py-10 font-sans">ウインカー開始・車線変更完了（1→2 / 2→1）・キャンセル・衝突イベントが最新200件まで時系列で記録されます</div>
+          </div>
+        </section>
+
+        <!-- [タブ5] 実験結果レコード（乱数シード保存・TSVコピー・CSV出力） -->
+        <section id="panel-records" class="tab-panel hidden flex-1 min-h-0 flex flex-col rounded-2xl border border-slate-800 bg-slate-950 overflow-hidden">
+          <div class="px-3.5 py-2 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
+            <span class="text-xs font-bold text-slate-200">実験結果レコード（乱数シード・方向別車線変更数保存）</span>
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <button id="btnRecordNow" class="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-semibold transition cursor-pointer">
+                + 現在値を記録
+              </button>
+              <button id="btnCopyTSV" class="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 font-semibold transition cursor-pointer">
+                TSVコピー
+              </button>
+              <button id="btnDownloadCSV" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition cursor-pointer">
+                CSV出力
+              </button>
+              <button id="btnClearRecords" class="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition cursor-pointer">
+                クリア
+              </button>
+            </div>
+          </div>
+          <div class="flex-1 overflow-auto">
+            <table class="w-full text-left border-collapse text-[11px] font-mono">
+              <thead class="bg-slate-900/95 text-slate-400 sticky top-0 border-b border-slate-800">
+                <tr>
+                  <th class="py-2 px-2.5">#</th>
+                  <th class="py-2 px-2.5 font-sans">設定</th>
+                  <th class="py-2 px-2">a</th>
+                  <th class="py-2 px-2">b</th>
+                  <th class="py-2 px-2">N</th>
+                  <th class="py-2 px-2">乱数r</th>
+                  <th class="py-2 px-2 text-indigo-300">シード</th>
+                  <th class="py-2 px-2 text-emerald-400">フロー効率F</th>
+                  <th class="py-2 px-2 text-amber-400">平均停止[s]</th>
+                  <th class="py-2 px-2 text-rose-400">衝突</th>
+                  <th class="py-2 px-2 text-sky-400">変更(1→2/2→1)</th>
+                  <th class="py-2 px-2 text-cyan-300">全車時間[s]</th>
+                </tr>
+              </thead>
+              <tbody id="experimentTableBody" class="divide-y divide-slate-800/70 text-slate-200">
+                <tr>
+                  <td colspan="12" class="py-10 text-center text-slate-500 font-sans">
+                    全車が到着点を通過すると確定値が自動記録されます（右上の「+ 現在値を記録」で任意時点の記録も可能です）
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </main>
+
+  <!-- =====================================================================
+       右ペイン：パラメータ・車線変更コード設定エリア（固定幅 380px）
+       ===================================================================== -->
+  <aside class="w-full lg:w-[380px] shrink-0 lg:h-full overflow-y-auto bg-slate-900 p-4 flex flex-col gap-3.5">
+
+    <!-- 1. 追従モデルパラメータ設定 -->
+    <section class="rounded-2xl bg-slate-950/90 border border-slate-800 p-3.5 flex flex-col gap-3">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <h2 class="text-xs sm:text-sm font-bold text-sky-400 tracking-wide">
+          1. 追従モデルパラメータ設定
+        </h2>
+        <span class="text-[10.5px] font-mono text-slate-500">Δt = 0.35s</span>
+      </div>
+
+      <!-- 感度 a（0.01〜5.00 スライダー / 最大 10.00 数値入力） -->
+      <div class="flex flex-col gap-1">
+        <div class="flex items-center justify-between text-xs">
+          <label for="inputASlider" class="font-semibold text-slate-300">感度 a（反応の強さ）</label>
+          <input id="inputANumber" type="number" step="0.01" min="0.01" max="10.00" value="0.80"
+            class="w-20 px-2 py-1 text-right font-mono font-bold text-xs bg-slate-900 border border-slate-700 rounded-lg text-sky-300 focus:outline-none focus:border-sky-500" />
+        </div>
+        <input id="inputASlider" type="range" min="0.01" max="5.00" step="0.01" value="0.80" class="sim-slider" />
+        <!-- 目盛り：つまみ中心座標 = calc(p% + (8 - 16*p/100)px) -->
+        <div class="relative h-6 text-[10px] font-mono text-slate-400 select-none">
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(0% + 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>0.01</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(15.8317% + 5.47px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-sky-400 mb-0.5"></span>
+            <span class="text-sky-300 font-semibold whitespace-nowrap">0.80(標準)</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(49.8998% + 0.02px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>2.50</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(100% - 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>5.00</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 目標車間距離 b（10〜200 m） -->
+      <div class="flex flex-col gap-1">
+        <div class="flex items-center justify-between text-xs">
+          <label for="inputBSlider" class="font-semibold text-slate-300">目標車間距離 b [m]</label>
+          <input id="inputBNumber" type="number" step="1" min="10" max="200" value="50"
+            class="w-20 px-2 py-1 text-right font-mono font-bold text-xs bg-slate-900 border border-slate-700 rounded-lg text-sky-300 focus:outline-none focus:border-sky-500" />
+        </div>
+        <input id="inputBSlider" type="range" min="10" max="200" step="1" value="50" class="sim-slider" />
+        <!-- 目盛り：つまみ中心座標 = calc(p% + (8 - 16*p/100)px) -->
+        <div class="relative h-6 text-[10px] font-mono text-slate-400 select-none">
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(0% + 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>10m</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(21.0526% + 4.63px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-sky-400 mb-0.5"></span>
+            <span class="text-sky-300 font-semibold whitespace-nowrap">50m(境界)</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(47.3684% + 0.42px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>100m</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(100% - 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>200m</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 1台目乱数倍率（0.00〜10.00） -->
+      <div class="flex flex-col gap-1 pt-1 border-t border-slate-800/80">
+        <div class="flex items-center justify-between text-xs">
+          <label for="inputNoiseSlider" class="font-semibold text-slate-300">1台目乱数 倍率</label>
+          <div class="flex items-center gap-1.5">
+            <span id="noiseAccelHint" class="text-[10px] font-mono text-slate-400">±1.49 m/s²</span>
+            <input id="inputNoiseNumber" type="number" step="0.01" min="0.00" max="10.00" value="1.00"
+              class="w-20 px-2 py-1 text-right font-mono font-bold text-xs bg-slate-900 border border-slate-700 rounded-lg text-amber-300 focus:outline-none focus:border-amber-500" />
+          </div>
+        </div>
+        <input id="inputNoiseSlider" type="range" min="0.00" max="10.00" step="0.01" value="1.00" class="sim-slider" />
+        <!-- 目盛り：つまみ中心座標 = calc(p% + (8 - 16*p/100)px) -->
+        <div class="relative h-6 text-[10px] font-mono text-slate-400 select-none">
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(0% + 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span class="whitespace-nowrap">0.00(なし)</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(10% + 6.4px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-amber-400 mb-0.5"></span>
+            <span class="text-amber-300 font-semibold whitespace-nowrap">1.00(標準)</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(50% + 0px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span>5.00</span>
+          </div>
+          <div class="absolute top-0 flex flex-col items-center" style="left: calc(100% - 8px); transform: translateX(-50%);">
+            <span class="w-px h-1.5 bg-slate-600 mb-0.5"></span>
+            <span class="whitespace-nowrap">10.00(最大)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 車台数 N & 到着点距離 goalX -->
+      <div class="grid grid-cols-2 gap-2.5">
+        <div class="flex flex-col gap-1">
+          <label for="inputN" class="text-[11px] font-semibold text-slate-300">車両台数 N [台]</label>
+          <input id="inputN" type="number" min="4" max="100" step="1" value="50"
+            class="w-full px-2.5 py-1.5 font-mono font-bold text-xs bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-sky-500" />
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="selectGoalX" class="text-[11px] font-semibold text-slate-300">到着点 goalX</label>
+          <select id="selectGoalX"
+            class="w-full px-2 py-1.5 text-xs font-mono font-semibold bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-sky-500 cursor-pointer">
+            <option value="6664" selected>6,664 m</option>
+            <option value="10000">10,000 m</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 緊急ゾーン & 乱数シード -->
+      <div class="grid grid-cols-2 gap-2.5">
+        <div class="flex flex-col gap-1">
+          <label for="selectEmergency" class="text-[11px] font-semibold text-slate-300">緊急ゾーン (-4.5m/s²)</label>
+          <select id="selectEmergency"
+            class="w-full px-2 py-1.5 text-xs font-semibold bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-sky-500 cursor-pointer">
+            <option value="true" selected>有効 (a&lt;-1, d&lt;100m)</option>
+            <option value="false">無効 (OFF)</option>
+          </select>
+        </div>
+
+        <div class="flex flex-col gap-1">
+          <label for="inputSeed" class="text-[11px] font-semibold text-slate-300">乱数シード</label>
+          <div class="flex items-center gap-1">
+            <input id="inputSeed" type="number" value="20260923"
+              class="w-full min-w-0 px-2 py-1.5 font-mono text-xs bg-slate-900 border border-slate-700 rounded-xl text-slate-100 focus:outline-none focus:border-sky-500" />
+            <button id="btnRandomSeed" class="px-2 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 border border-slate-700 transition cursor-pointer shrink-0" title="新しい乱数シードを生成">
+              🎲
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 車線変更条件 JavaScript エディタ -->
+    <section class="rounded-2xl bg-slate-950/90 border border-slate-800 p-3.5 flex flex-col gap-2.5 flex-1">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <h2 class="text-xs sm:text-sm font-bold text-emerald-400 tracking-wide">
+          2. 車線変更条件 JSエディタ
+        </h2>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer text-xs font-semibold">
+          <input id="checkboxLaneChange" type="checkbox" checked class="w-4 h-4 accent-emerald-500 rounded cursor-pointer" />
+          <span id="laneChangeToggleLabel" class="text-emerald-300">車線変更 有効</span>
+        </label>
+      </div>
+
+      <!-- 固定安全ルールサマリー -->
+      <div class="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] text-slate-300 space-y-1">
+        <div class="font-bold text-slate-200 flex items-center justify-between">
+          <span>🔒 双方向・固定安全条件仕様</span>
+          <span class="font-mono text-[10px] text-amber-400">1/4抽選 → 2.8s</span>
+        </div>
+        <ul class="list-disc list-inside text-slate-400 space-y-0.5 text-[10.5px] leading-relaxed">
+          <li>第1・第2車線をステップ毎に交互ターン評価 (<span class="font-mono text-slate-200">0.7s周期/車線</span>)</li>
+          <li>速度 <span class="font-mono text-slate-200">&lt; 15m/s</span>、前後 <span class="font-mono text-slate-200">100m</span> に衝突(7s)・試行/禁止(3.5s)なし</li>
+          <li>移動先車線の前 <span class="font-mono text-slate-200">30m</span> / 後 <span class="font-mono text-slate-200">50m</span> (<span class="font-mono text-slate-200">-50&lt;dx&lt;30</span>) が安全</li>
+          <li>ウインカー <span class="font-mono text-amber-300">2.8秒(8st)</span> 後移動／落選・取消時は <span class="font-mono text-rose-300">3.5秒(10st)</span> 禁止</li>
+        </ul>
+      </div>
+
+      <!-- 引数リファレンス -->
+      <div class="flex flex-col gap-1">
+        <span class="text-[10.5px] font-semibold text-slate-400">利用可能変数（クリックでカーソル位置へ挿入）:</span>
+        <div class="flex flex-wrap gap-1 font-mono text-[10px]">
+          <button type="button" data-arg="otherGap" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 cursor-pointer">otherGap</button>
+          <button type="button" data-arg="currentGap" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 cursor-pointer">currentGap</button>
+          <button type="button" data-arg="otherFrontSpeed" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 cursor-pointer">otherFrontSpeed</button>
+          <button type="button" data-arg="currentFrontSpeed" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 cursor-pointer">currentFrontSpeed</button>
+          <button type="button" data-arg="otherBackGap" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 cursor-pointer">otherBackGap</button>
+          <button type="button" data-arg="car.v" class="arg-chip px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-purple-300 border border-slate-700 cursor-pointer">car.v</button>
+        </div>
+      </div>
+
+      <!-- 関数本体コードエディタ -->
+      <div class="flex flex-col gap-1 flex-1 min-h-[130px]">
+        <div class="flex items-center justify-between text-[11px] font-mono text-slate-400">
+          <span>function checkMerit(...) {</span>
+          <span id="codeStatusIndicator" class="text-emerald-400 font-sans font-semibold">✓ 適用済み</span>
+        </div>
+        <textarea id="jsConditionEditor" spellcheck="false"
+          class="w-full flex-1 min-h-[92px] p-2.5 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs text-emerald-300 leading-relaxed focus:outline-none focus:border-emerald-500 resize-y">// 移動先車線の前車との車間距離が自車線より広い場合に車線変更
+// （距離＋速度の両条件にする場合: return otherGap > currentGap && otherFrontSpeed > currentFrontSpeed;）
+return otherGap > currentGap;</textarea>
+        <div class="text-[11px] font-mono text-slate-400">}</div>
+      </div>
+
+      <!-- 構文エラー表示 -->
+      <div id="jsErrorDisplay" class="hidden p-2 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 font-mono text-[11px] break-all"></div>
+
+      <!-- 適用ボタン ＆ デフォルト復元ボタン -->
+      <div class="grid grid-cols-3 gap-2">
+        <button id="btnApplyCode" class="col-span-2 py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-600 text-slate-950 font-bold text-xs transition cursor-pointer shadow-sm">
+          条件コードを適用
+        </button>
+        <button id="btnRestoreDefaultCode" class="col-span-1 py-2 px-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-semibold text-xs transition cursor-pointer">
+          デフォルト復元
+        </button>
+      </div>
+    </section>
+
+  </aside>
+
+  <!-- =====================================================================
+       シミュレーションエンジン & 可視化・UI制御スクリプト
+       ===================================================================== -->
+  <script>
+    'use strict';
+
+    const DEFAULT_CONDITION_CODE =
+      '// 移動先車線の前車との車間距離が自車線より広い場合に車線変更\n' +
+      '// （距離＋速度の両条件にする場合: return otherGap > currentGap && otherFrontSpeed > currentFrontSpeed;）\n' +
+      'return otherGap > currentGap;';
+
+    const INF_GAP = 999999;
+
+    /**
+     * トースト通知（alert代替）
+     */
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      if (!container) return;
+      const el = document.createElement('div');
+      const colors = {
+        info: 'bg-slate-800 border-sky-500/50 text-sky-200',
+        success: 'bg-emerald-950/95 border-emerald-500/60 text-emerald-200',
+        error: 'bg-rose-950/95 border-rose-500/60 text-rose-200',
+      };
+      el.className = `px-3.5 py-2 rounded-xl border shadow-lg text-xs font-medium transition-all duration-300 ${colors[type] || colors.info}`;
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(6px)';
+        setTimeout(() => el.remove(), 300);
+      }, 2600);
+    }
+
+    /**
+     * 決定論的擬似乱数生成器（Mulberry32）
+     */
+    function createSeededRNG(seed) {
+      let a = seed >>> 0;
+      return function () {
+        a |= 0;
+        a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    /**
+     * ========================================================================
+     * 1. 2車線高速道路 交通流物理シミュレーションエンジン（双方向車線変更完全対応版）
+     * ========================================================================
+     */
+    class TrafficSimulator {
+      constructor() {
+        // 物理定数（Scratchモデル準拠）
+        this.dt = 0.35;          // 時間刻み [s]
+        this.carLength = 4.0;    // 車長 [m]
+        this.vInit = 20.0;       // 初期速度 [m/s]
+        this.vMaxFollow = 23.0;  // 後続車最高速度 Vmax [m/s]
+        this.vMinLead = 16.0;    // 先頭車最低速度 [m/s]
+        this.vMaxLead = 22.0;    // 先頭車最高速度 [m/s]
+        this.aMax = 1.5;         // 最大加速度 [m/s²]
+        this.aMin = -4.0;        // 通常最大減速度 [m/s²]
+        this.aEmergency = -4.5;  // 緊急ゾーン減速度 [m/s²]
+
+        // パラメータ初期値
+        this.params = {
+          a: 0.80,
+          b: 50,
+          N: 50,
+          leadRandomMultiplier: 1.00,
+          goalX: 6664,
+          emergencyZone: true,
+          laneChangeEnabled: true,
+          seed: 20260923,
+        };
+
+        this.conditionCode = DEFAULT_CONDITION_CODE;
+        this.conditionFn = null;
+        this.compileCondition(this.conditionCode);
+
+        this.reset();
+      }
+
+      /**
+       * カスタム車線変更メリット判定関数のコンパイル
+       * otherGap / currentGap と 旧互換エイリアス targetFrontGap / currentFrontGap を両方提供
+       */
+      compileCondition(code) {
+        try {
+          const fn = new Function(
+            'car',
+            'currentGap',
+            'currentFrontSpeed',
+            'otherGap',
+            'otherFrontSpeed',
+            'otherBackGap',
+            'currentFrontGap',
+            'targetFrontGap',
+            'targetFrontSpeed',
+            'targetBackGap',
+            `"use strict";\n${code}`
+          );
+          const testCar = { id: 3, lane: 1, x: 0, v: 12, a: 0 };
+          fn(testCar, 25, 10, 60, 18, 80, 25, 60, 18, 80);
+          this.conditionFn = fn;
+          this.conditionCode = code;
+          return { ok: true, error: null };
+        } catch (err) {
+          return { ok: false, error: err.message };
+        }
+      }
+
+      /**
+       * 初期配置（k=1..N を x = -(k-1)*50m に配置し、奇数ID=第1車線・偶数ID=第2車線）
+       */
+      reset() {
+        this.rng = createSeededRNG(this.params.seed);
+        this.stepCount = 0;
+        this.elapsedTime = 0;
+
+        // 到達基準時間・完了スナップショット
+        this.time1100m = null;           // 1台目観測基準時間（1100m到達時間）
+        this.leadArrivalTime = null;     // 先頭車到達時間（到達点までの時間 C）
+        this.allCarsArrivalTime = null;  // 全車両が到達するまでの時間
+        this.isAllGoalsCompleted = false;
+        this.completedMetrics = null;
+        this.autoLogged = false;
+
+        // 観測区間（0 <= x < goalX）内の累積変数
+        this.speedSumSv = 0;         // 速度合計 Sv
+        this.validStaySteps = 0;     // 対象追従車(N-2台)の観測区間有効滞在ステップ合計
+        this.totalStopTime = 0;      // 停止秒数合計（car.v <= 0.1 のとき dt 加算）
+        this.collisionCount = 0;     // 衝突回数
+        this.laneChangeCount = 0;    // 総車線変更回数
+        this.laneChanges1to2 = 0;    // 第1車線 → 第2車線 回数
+        this.laneChanges2to1 = 0;    // 第2車線 → 第1車線 回数
+
+        // 可視化履歴・イベントログ
+        this.trajectories = new Map();
+        this.timeSeries = [];
+        this.eventLogs = [];
+        this.totalEventCounter = 0;
+
+        this.cars = [];
+        // lanes[0] = 第1車線 (lane === 1), lanes[1] = 第2車線 (lane === 2)
+        this.lanes = [[], []];
+
+        const N = this.params.N;
+        this.minTrackX = Math.min(-2500, -Math.ceil((N * 50 + 200) / 500) * 500);
+
+        for (let k = 1; k <= N; k++) {
+          const x0 = -(k - 1) * 50;
+          const lane0 = k % 2 === 1 ? 1 : 2;
+          const car = {
+            id: k,
+            lane: lane0,
+            x: x0,
+            v: this.vInit,
+            a: 0,
+            // 3ステップ反応遅延履歴（[0]=最新, [1]=1歩前, [2]=2歩前/約0.7s遅延）
+            history: [
+              { x: x0, v: this.vInit, a: 0 },
+              { x: x0, v: this.vInit, a: 0 },
+              { x: x0, v: this.vInit, a: 0 },
+            ],
+            blinkerTimer: 0,      // ウインカー点灯残りステップ（2.8s = 8st）
+            targetLane: null,     // ウインカー点灯中の目標車線 (1 or 2)
+            cooldownTimer: 0,     // 変更禁止残りステップ（3.5s = 10st）
+            collisionTimer: 0,    // 衝突警戒残りステップ（7.0s = 20st）
+            emergencyActive: false,
+            stopTime: 0,
+            enteredStep: x0 >= 0 ? 0 : null,
+            exitedStep: null,
+            hasReachedGoal: false,
+          };
+          this.cars.push(car);
+          this.lanes[lane0 - 1].push(car);
+          this.trajectories.set(k, [{ t: 0, x: x0, v: this.vInit, lane: lane0 }]);
+        }
+
+        // 各車線リストを位置 x 降順（先頭が index 0）でソート
+        this._sortLaneLists();
+
+        this.timeSeries.push({
+          t: 0,
+          avgSpeed: this.vInit,
+          avgStop: 0,
+        });
+      }
+
+      /**
+       * 両車線リストを位置 x の降順（先頭が index 0）に維持
+       */
+      _sortLaneLists() {
+        this.lanes[0].sort((a, b) => b.x - a.x);
+        this.lanes[1].sort((a, b) => b.x - a.x);
+      }
+
+      /**
+       * イベントログ追加（最新200件を保持）
+       */
+      _addEvent(type, carId, detail) {
+        this.totalEventCounter += 1;
+        this.eventLogs.unshift({
+          seq: this.totalEventCounter,
+          t: this.elapsedTime.toFixed(2),
+          type,
+          carId,
+          detail,
+        });
+        if (this.eventLogs.length > 200) {
+          this.eventLogs.pop();
+        }
+      }
+
+      /**
+       * 単一統一の移動先空間安全判定（第1↔第2車線で完全対称）
+       * 相対位置 dx = other.x - car.x が -50 < dx && dx < 30 の範囲に1台でもいれば false
+       */
+      isTargetSpaceSafe(car, targetList) {
+        for (let i = 0; i < targetList.length; i++) {
+          const other = targetList[i];
+          if (other.id === car.id) continue;
+          const dx = other.x - car.x;
+          if (dx > -50.0 && dx < 30.0) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      /**
+       * x降順ソート済み車線リストにおける前車・後車の対称ルックアップ
+       */
+      _getFrontAndBackInfo(car, laneList) {
+        let frontCar = null;
+        let backCar = null;
+
+        // laneList は x 降順（index 0 が最も前方）
+        for (let i = 0; i < laneList.length; i++) {
+          const other = laneList[i];
+          if (other.id === car.id) continue;
+          if (other.x > car.x) {
+            frontCar = other; // x降順なのでループ中に更新され、最終的に直前の前車が残る
+          } else {
+            backCar = other;  // car.x 以下の最初の車両が直後の後車
+            break;
+          }
+        }
+
+        const frontGap = frontCar ? Math.max(0, frontCar.x - car.x - this.carLength) : INF_GAP;
+        const frontSpeed = frontCar ? frontCar.v : this.vMaxFollow;
+        const backGap = backCar ? Math.max(0, car.x - backCar.x - this.carLength) : INF_GAP;
+
+        return {
+          frontCar,
+          frontGap,
+          frontSpeed,
+          backGap,
+        };
+      }
+
+      /**
+       * 1ステップ (dt = 0.35s) 進行
+       */
+      step() {
+        this.stepCount += 1;
+        this.elapsedTime = this.stepCount * this.dt;
+
+        this._sortLaneLists();
+
+        const nextAccels = new Map();
+        const nextEmergency = new Map();
+
+        // -------------------------------------------------------------------
+        // 1. 各車両の次ステップ加速度を算出（Scratch数式ブロック準拠）
+        // -------------------------------------------------------------------
+        for (let laneIdx = 0; laneIdx < 2; laneIdx++) {
+          const list = this.lanes[laneIdx];
+          for (let i = 0; i < list.length; i++) {
+            const car = list[i];
+            let alpha = 0;
+            let emg = false;
+
+            if (car.id === 1) {
+              // 先頭車両（1台目）：最大 ±1.49 * leadRandomMultiplier のランダム加速度外乱
+              const mult = this.params.leadRandomMultiplier;
+              if (mult === 0) {
+                alpha = 0;
+              } else {
+                alpha = (this.rng() * 2 - 1) * 1.49 * mult;
+                alpha = Math.max(this.aMin, Math.min(this.aMax, alpha));
+              }
+            } else if (i === 0) {
+              // 各車線の先頭車両（1台目以外）：+1.5 m/s² で最高速度 23 m/s まで加速
+              alpha = car.v < this.vMaxFollow ? this.aMax : 0;
+            } else {
+              // 追従車両（3ステップ反応遅延履歴を使用）
+              const front = list[i - 1];
+              const selfDelayed = car.history[2];
+              const frontDelayed = front.history[2];
+
+              const d = frontDelayed.x + frontDelayed.v * this.dt - this.carLength - selfDelayed.x;
+              const dv = selfDelayed.v - frontDelayed.v;
+              const dAlpha = selfDelayed.a - frontDelayed.a;
+
+              alpha =
+                this.params.a *
+                ((d - this.params.b) / (this.dt * this.dt) - dv / this.dt + dAlpha);
+
+              if (alpha > 0){
+                alpha *= 0.7;}
+
+              // 緊急ゾーン判定：遅延前車加速度 < -1.0 かつ 遅延車間 < 100m
+              if (
+                this.params.emergencyZone &&
+                frontDelayed.a < -1.0 &&
+                frontDelayed.x - selfDelayed.x < 100.0
+              ) {
+                alpha = this.aEmergency;
+                emg = true;
+              } else {
+                alpha = Math.max(this.aMin, Math.min(this.aMax, alpha));
+              }
+            }
+
+            nextAccels.set(car.id, alpha);
+            nextEmergency.set(car.id, emg);
+          }
+        }
+
+        // -------------------------------------------------------------------
+        // 2. 速度・位置・3ステップ履歴・観測区間進入/退出の更新
+        // -------------------------------------------------------------------
+        const goalX = this.params.goalX;
+        let inZoneSpeedSum = 0;
+        let inZoneCount = 0;
+
+        for (const car of this.cars) {
+          const alpha = nextAccels.get(car.id);
+          car.emergencyActive = nextEmergency.get(car.id);
+          car.a = alpha;
+
+          if (car.id === 1) {
+            if (this.params.leadRandomMultiplier === 0) {
+              car.v = this.vInit;
+              car.a = 0;
+            } else {
+              const rawV = car.v + alpha * this.dt;
+              car.v = Math.max(this.vMinLead, Math.min(this.vMaxLead, rawV));
+            }
+          } else {
+            const rawV = car.v + alpha * this.dt;
+            car.v = Math.max(0, Math.min(this.vMaxFollow, rawV));
+          }
+
+          car.x += car.v * this.dt;
+
+          // 3ステップ反応遅延履歴シフト
+          car.history.unshift({ x: car.x, v: car.v, a: car.a });
+          if (car.history.length > 3) {
+            car.history.pop();
+          }
+
+          // 基準到達時間の記録
+          if (car.id === 1 && this.time1100m === null && car.x >= 1100) {
+            this.time1100m = this.elapsedTime;
+          }
+          if (car.id === 1 && this.leadArrivalTime === null && car.x >= goalX) {
+            this.leadArrivalTime = this.elapsedTime;
+          }
+
+          // 観測区間（0 <= x < goalX）の進入・退出ステップ判定
+          if (car.enteredStep === null && car.x >= 0) {
+            car.enteredStep = this.stepCount;
+          }
+          if (!car.hasReachedGoal && car.x >= goalX) {
+            car.hasReachedGoal = true;
+            car.exitedStep = this.stepCount;
+          }
+
+          // 観測区間内のKPI集計
+          if (car.x >= 0 && car.x < goalX) {
+            inZoneSpeedSum += car.v;
+            inZoneCount += 1;
+
+            const minTargetId = this.params.N > 2 ? 3 : 2;
+            if (car.id >= minTargetId) {
+              this.speedSumSv += car.v;
+              this.validStaySteps += 1;
+            }
+
+            if (car.v <= 0.1) {
+              car.stopTime += this.dt;
+              this.totalStopTime += this.dt;
+            }
+          }
+
+          // 時空図軌跡の記録（上限撤廃・全車到着まで継続し到着後は停止）
+          if (!this.isAllGoalsCompleted) {
+            const traj = this.trajectories.get(car.id);
+            if (traj) {
+              traj.push({ t: this.elapsedTime, x: car.x, v: car.v, lane: car.lane });
+            }
+          }
+        }
+
+        // 時系列データ記録（上限撤廃・全車到着まで継続し到着後は停止）
+        if (!this.isAllGoalsCompleted) {
+          const avgSpd = inZoneCount > 0 ? inZoneSpeedSum / inZoneCount : this.vInit;
+          const avgStp = this.totalStopTime / this.params.N;
+          this.timeSeries.push({
+            t: this.elapsedTime,
+            avgSpeed: avgSpd,
+            avgStop: avgStp,
+          });
+        }
+
+        // 位置更新後に両車線を再ソート
+        this._sortLaneLists();
+
+        // -------------------------------------------------------------------
+        // 3. 衝突判定（車長 4m 基準・7.0秒 = 20ステップ警戒タイマー）
+        // -------------------------------------------------------------------
+        for (let laneIdx = 0; laneIdx < 2; laneIdx++) {
+          const list = this.lanes[laneIdx];
+          for (let i = 1; i < list.length; i++) {
+            const front = list[i - 1];
+            const car = list[i];
+            const gap = front.x - car.x;
+            if (gap < this.carLength && car.collisionTimer === 0) {
+              if (car.x >= 0 && car.x < goalX) {
+                this.collisionCount += 1;
+                this._addEvent(
+                  'collision',
+                  car.id,
+                  `第${laneIdx + 1}車線で前車#${front.id}と接触 (車間 ${(gap - this.carLength).toFixed(1)}m)`
+                );
+              }
+              car.collisionTimer = 20; // 7.0秒 (20ステップ)
+            }
+          }
+        }
+
+        // -------------------------------------------------------------------
+        // 4. 双方向車線変更（状態評価フェーズとリスト移動フェーズを完全分離）
+        // -------------------------------------------------------------------
+        // 奇数ステップは第1車線、偶数ステップは第2車線のみ新規評価（0.7秒周期/車線）
+        const activeTurnLane = this.stepCount % 2 === 1 ? 1 : 2;
+        const turnOrder = this.stepCount % 2 === 1 ? [1, 2] : [2, 1];
+        const pendingTransfers = [];
+
+        // [Phase A] 状態評価フェーズ（ここでは this.lanes を書き換えない）
+        for (const laneId of turnOrder) {
+          const sameLaneIdx = laneId - 1;
+          const otherLaneIdx = laneId === 1 ? 1 : 0;
+          const targetLaneId = laneId === 1 ? 2 : 1;
+
+          const sameList = this.lanes[sameLaneIdx];
+          const otherList = this.lanes[otherLaneIdx];
+
+          for (let i = 0; i < sameList.length; i++) {
+            const car = sameList[i];
+
+            if (car.cooldownTimer > 0) car.cooldownTimer -= 1;
+            if (car.collisionTimer > 0) car.collisionTimer -= 1;
+
+            // A-1. ウインカー点灯中のカウントダウンと実行判定（毎ステップ実行）
+            if (car.blinkerTimer > 0) {
+              car.blinkerTimer -= 1;
+              if (car.blinkerTimer === 0) {
+                if (this.isTargetSpaceSafe(car, otherList)) {
+                  pendingTransfers.push({
+                    car,
+                    fromLane: laneId,
+                    toLane: targetLaneId,
+                  });
+                } else {
+                  car.cooldownTimer = 10; // 3.5秒禁止
+                  car.targetLane = null;
+                  this._addEvent(
+                    'cancel',
+                    car.id,
+                    `第${laneId}→第${targetLaneId}車線変更を取消（安全スペース不足）`
+                  );
+                }
+              }
+              continue;
+            }
+
+            // 新規評価・1/4抽選はそのステップのターン車線（0.7秒周期/車線）のみ実行
+            if (laneId !== activeTurnLane) continue;
+
+            // A-2. 新規ウインカー開始条件（第1・第2車線完全対称）
+            if (
+              !this.params.laneChangeEnabled ||
+              car.id === 1 ||
+              car.cooldownTimer > 0 ||
+              car.collisionTimer > 0 ||
+              car.v >= 15.0
+            ) {
+              continue;
+            }
+
+            // 前後100m以内に衝突(7s)・ウインカー中・試行/禁止(3.5s)の車両がいないか確認
+            let nearbyBusy = false;
+            for (const other of this.cars) {
+              if (other.id === car.id) continue;
+              if (Math.abs(other.x - car.x) < 100.0) {
+                if (other.collisionTimer > 0 || other.blinkerTimer > 0 || other.cooldownTimer > 0) {
+                  nearbyBusy = true;
+                  break;
+                }
+              }
+            }
+            if (nearbyBusy) continue;
+
+            // 移動先車線の安全空間チェック（-50 < dx < 30 が空いているか）
+            if (!this.isTargetSpaceSafe(car, otherList)) continue;
+
+            // 自車線・移動先車線の前車ギャップと速度を対称取得（前車なしは Infinity）
+            const sameInfo = this._getFrontAndBackInfo(car, sameList);
+            const otherInfo = this._getFrontAndBackInfo(car, otherList);
+
+            let meritOk = false;
+            if (this.conditionFn) {
+              try {
+                meritOk = Boolean(
+                  this.conditionFn(
+                    car,
+                    sameInfo.frontGap,
+                    sameInfo.frontSpeed,
+                    otherInfo.frontGap,
+                    otherInfo.frontSpeed,
+                    otherInfo.backGap,
+                    sameInfo.frontGap,
+                    otherInfo.frontGap,
+                    otherInfo.frontSpeed,
+                    otherInfo.backGap
+                  )
+                );
+              } catch (_err) {
+                meritOk = false;
+              }
+            }
+
+            if (meritOk) {
+              // 1/4 の確率抽選
+              if (this.rng() < 0.25) {
+                car.blinkerTimer = 8; // 2.8秒ウインカー開始
+                car.targetLane = targetLaneId;
+                this._addEvent(
+                  'blinker',
+                  car.id,
+                  `第${laneId}→第${targetLaneId}車線へウインカー点灯 (v=${car.v.toFixed(1)}m/s)`
+                );
+              } else {
+                // 抽選落選時は「車線変更しようとした」判定として 3.5秒(10st) の禁止時間を付与
+                car.cooldownTimer = 10;
+              }
+            }
+          }
+        }
+
+        // [Phase B] 車線リスト移動フェーズ（評価完了後に一括反映してx降順再ソート）
+        if (pendingTransfers.length > 0) {
+          for (const tr of pendingTransfers) {
+            const { car, fromLane, toLane } = tr;
+            const srcList = this.lanes[fromLane - 1];
+            const dstList = this.lanes[toLane - 1];
+            const idx = srcList.indexOf(car);
+            if (idx !== -1) {
+              srcList.splice(idx, 1);
+            }
+            car.lane = toLane;
+            car.targetLane = null;
+            car.cooldownTimer = 10; // 3.5秒禁止
+            dstList.push(car);
+
+            if (car.x >= 0 && car.x < goalX) {
+              this.laneChangeCount += 1;
+              if (fromLane === 1 && toLane === 2) {
+                this.laneChanges1to2 += 1;
+              } else if (fromLane === 2 && toLane === 1) {
+                this.laneChanges2to1 += 1;
+              }
+            }
+
+            this._addEvent(
+              'change',
+              car.id,
+              `第${fromLane}→第${toLane}車線へ移動完了 (x=${car.x.toFixed(0)}m, v=${car.v.toFixed(1)}m/s)`
+            );
+          }
+          this._sortLaneLists();
+        }
+
+        // -------------------------------------------------------------------
+        // 5. 全車到着点通過チェック（確定スナップショット保存）
+        // -------------------------------------------------------------------
+        if (!this.isAllGoalsCompleted) {
+          const allReached = this.cars.every((c) => c.hasReachedGoal);
+          if (allReached) {
+            this.isAllGoalsCompleted = true;
+            this.allCarsArrivalTime = this.elapsedTime;
+            this.completedMetrics = this.getMetrics();
+          }
+        }
+      }
+
+      /**
+       * 現在の評価指標（KPI）計算
+       */
+      getMetrics() {
+        if (this.isAllGoalsCompleted && this.completedMetrics) {
+          return this.completedMetrics;
+        }
+        const denom = this.validStaySteps * this.vMaxFollow;
+        const flowEfficiency = denom > 0 ? this.speedSumSv / denom : 0;
+        const avgStopTime = this.params.N > 0 ? this.totalStopTime / this.params.N : 0;
+        const activeCars = this.cars.filter((c) => !c.hasReachedGoal).length;
+
+        return {
+          flowEfficiency,
+          avgStopTime,
+          totalStopTime: this.totalStopTime,
+          collisionCount: this.collisionCount,
+          laneChangeCount: this.laneChangeCount,
+          laneChanges1to2: this.laneChanges1to2,
+          laneChanges2to1: this.laneChanges2to1,
+          activeCars,
+          totalCars: this.params.N,
+          speedSumSv: this.speedSumSv,
+          validStaySteps: this.validStaySteps,
+          time1100m: this.time1100m,
+          leadArrivalTime: this.leadArrivalTime,
+          allCarsArrivalTime: this.allCarsArrivalTime,
+          isFinalized: this.isAllGoalsCompleted,
+        };
+      }
+    }
+
+    /**
+     * ========================================================================
+     * 2. 7段折り返し2車線道路キャンバス描画クラス
+     * ========================================================================
+     */
+    class RoadCanvasRenderer {
+      constructor(canvas, simulator, onInspectChange) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.sim = simulator;
+        this.onInspectChange = onInspectChange;
+
+        this.numSegments = 7;
+        this.carHitBoxes = [];
+        this.hoveredCarId = null;
+        this.selectedCarId = null;
+
+        this._bindPointerEvents();
+      }
+
+      _bindPointerEvents() {
+        const findHitCar = (clientX, clientY) => {
+          const rect = this.canvas.getBoundingClientRect();
+          const mx = clientX - rect.left;
+          const my = clientY - rect.top;
+          for (let i = this.carHitBoxes.length - 1; i >= 0; i--) {
+            const box = this.carHitBoxes[i];
+            if (mx >= box.x - 4 && mx <= box.x + box.w + 4 && my >= box.y - 4 && my <= box.y + box.h + 4) {
+              return box.carId;
+            }
+          }
+          return null;
+        };
+
+        this.canvas.addEventListener('mousemove', (e) => {
+          const hit = findHitCar(e.clientX, e.clientY);
+          if (hit !== this.hoveredCarId) {
+            this.hoveredCarId = hit;
+            this.onInspectChange(this.selectedCarId || this.hoveredCarId);
+          }
+        });
+
+        this.canvas.addEventListener('mouseleave', () => {
+          if (this.hoveredCarId !== null) {
+            this.hoveredCarId = null;
+            this.onInspectChange(this.selectedCarId);
+          }
+        });
+
+        this.canvas.addEventListener('click', (e) => {
+          const hit = findHitCar(e.clientX, e.clientY);
+          this.selectedCarId = hit;
+          this.onInspectChange(this.selectedCarId || this.hoveredCarId);
+        });
+      }
+
+      _getCarColor(id) {
+        // 1台目（先頭車両）は常に鮮やかな赤色に固定
+        if (id === 1) {
+          return '#ef4444';
+        }
+        // 2台目以降は赤色域（0°付近）と重ならない色相域（28°〜332°）で色分け
+        const hue = 28 + ((id * 137.508) % 304);
+        return `hsl(${hue.toFixed(0)}, 82%, 56%)`;
+      }
+
+      draw(blinkOn) {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = this.canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        if (this.canvas.width !== Math.floor(rect.width * dpr) || this.canvas.height !== Math.floor(rect.height * dpr)) {
+          this.canvas.width = Math.floor(rect.width * dpr);
+          this.canvas.height = Math.floor(rect.height * dpr);
+        }
+
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        const W = rect.width;
+        const H = rect.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const minX = this.sim.minTrackX;
+        const maxX = this.sim.params.goalX;
+        const totalSpan = maxX - minX;
+        const segSpan = totalSpan / this.numSegments;
+
+        const padX = 14;
+        const padY = 10;
+        const trackW = W - padX * 2;
+        const rowH = (H - padY * 2) / this.numSegments;
+        const roadH = Math.max(18, Math.min(32, rowH * 0.68));
+
+        this.carHitBoxes = [];
+
+        // 7段の道路帯を描画
+        for (let s = 0; s < this.numSegments; s++) {
+          const segStart = minX + s * segSpan;
+          const segEnd = segStart + segSpan;
+          const rowTop = padY + s * rowH;
+          const roadTop = rowTop + (rowH - roadH) * 0.65;
+          const roadCenterY = roadTop + roadH / 2;
+
+          ctx.fillStyle = '#64748b';
+          ctx.font = '10px "JetBrains Mono", monospace';
+          ctx.textAlign = 'left';
+          ctx.fillText(`${Math.round(segStart).toLocaleString()}m`, padX, roadTop - 3);
+
+          ctx.textAlign = 'right';
+          ctx.fillText(`${Math.round(segEnd).toLocaleString()}m`, padX + trackW, roadTop - 3);
+
+          // 道路背景
+          ctx.fillStyle = '#0f172a';
+          ctx.beginPath();
+          ctx.roundRect(padX, roadTop, trackW, roadH, 4);
+          ctx.fill();
+
+          ctx.strokeStyle = '#1e293b';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // 中央白破線（上側: 第1車線 / 下側: 第2車線）
+          ctx.save();
+          ctx.strokeStyle = '#334155';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 6]);
+          ctx.beginPath();
+          ctx.moveTo(padX + 2, roadCenterY);
+          ctx.lineTo(padX + trackW - 2, roadCenterY);
+          ctx.stroke();
+          ctx.restore();
+
+          // 0m START ライン
+          if (0 >= segStart && 0 <= segEnd) {
+            const zeroPx = padX + ((0 - segStart) / segSpan) * trackW;
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(zeroPx, roadTop - 2);
+            ctx.lineTo(zeroPx, roadTop + roadH + 2);
+            ctx.stroke();
+
+            ctx.fillStyle = '#22d3ee';
+            ctx.font = 'bold 9px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('START', zeroPx, roadTop - 3);
+          }
+
+          // GOAL ライン
+          if (s === this.numSegments - 1) {
+            const goalPx = padX + trackW;
+            ctx.strokeStyle = '#10b981';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(goalPx, roadTop - 2);
+            ctx.lineTo(goalPx, roadTop + roadH + 2);
+            ctx.stroke();
+          }
+        }
+
+        // 各車両を描画（ゴール到達後も周回座標で描画継続）
+        const activeInspectId = this.selectedCarId || this.hoveredCarId;
+
+        for (const car of this.sim.cars) {
+          const renderX = minX + ((((car.x - minX) % totalSpan) + totalSpan) % totalSpan);
+          let segIdx = Math.floor((renderX - minX) / segSpan);
+          if (segIdx < 0) segIdx = 0;
+          if (segIdx >= this.numSegments) segIdx = this.numSegments - 1;
+
+          const segStart = minX + segIdx * segSpan;
+          const localRatio = (renderX - segStart) / segSpan;
+
+          const rowTop = padY + segIdx * rowH;
+          const roadTop = rowTop + (rowH - roadH) * 0.65;
+          const laneH = roadH / 2;
+
+          // 車線Y座標（第1車線は上半分、第2車線は下半分。残り1ステップ時は境界線上に描画）
+          let laneOffsetY = car.lane === 1 ? laneH * 0.5 : laneH * 1.5;
+          if (car.blinkerTimer === 1) {
+            laneOffsetY = laneH;
+          }
+
+          const carW = Math.max(6, (this.sim.carLength / segSpan) * trackW);
+          const carH = Math.max(5.5, laneH * 0.64);
+          const cx = padX + localRatio * trackW;
+          const cy = roadTop + laneOffsetY;
+          const rx = cx - carW;
+          const ry = cy - carH / 2;
+
+          this.carHitBoxes.push({ carId: car.id, x: rx, y: ry, w: carW, h: carH });
+
+          // 緊急ブレーキ波紋 ((
+          if (car.emergencyActive) {
+            ctx.strokeStyle = '#fb7185';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(rx - 2, cy, carH * 0.65, Math.PI * 0.65, Math.PI * 1.35);
+            ctx.stroke();
+          }
+
+          // 衝突警戒中の赤枠ハロー
+          if (car.collisionTimer > 0 && blinkOn) {
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(rx - 2, ry - 2, carW + 4, carH + 4);
+          }
+
+          // 車体描画
+          ctx.fillStyle = this._getCarColor(car.id);
+          ctx.beginPath();
+          ctx.roundRect(rx, ry, carW, carH, 2);
+          ctx.fill();
+
+          // 選択・ホバーハイライト
+          if (activeInspectId === car.id) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.8;
+            ctx.strokeRect(rx - 2, ry - 2, carW + 4, carH + 4);
+          }
+
+          // ゴール到達済み周回車両のシアンマーカー
+          if (car.hasReachedGoal) {
+            ctx.fillStyle = '#67e8f9';
+            ctx.beginPath();
+            ctx.arc(rx + carW * 0.5, ry - 2, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // 方向付きウインカー矢印＆残り秒数表示（第1→第2は下向き▼、第2→第1は上向き▲）
+          if (car.blinkerTimer > 0) {
+            const goingDown = car.lane === 1; // 1 -> 2 は下向き、2 -> 1 は上向き
+            const tipX = rx + carW * 0.5;
+            const baseY = goingDown ? ry + carH + 1 : ry - 1;
+            const tipY = goingDown ? baseY + 4.5 : baseY - 4.5;
+
+            if (blinkOn) {
+              ctx.fillStyle = '#fbbf24';
+              ctx.beginPath();
+              ctx.moveTo(tipX, tipY);
+              ctx.lineTo(tipX - 3.2, baseY);
+              ctx.lineTo(tipX + 3.2, baseY);
+              ctx.closePath();
+              ctx.fill();
+            }
+
+            // 残り秒数ラベル
+            const remSec = (car.blinkerTimer * this.sim.dt).toFixed(1);
+            ctx.fillStyle = '#fde047';
+            ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${remSec}s`, tipX, goingDown ? tipY + 8 : tipY - 2);
+          }
+        }
+
+        ctx.restore();
+      }
+    }
+
+    /**
+     * ========================================================================
+     * 3. 時空図（Time-Space Diagram）レンダラー（車線フィルタ対応）
+     * ========================================================================
+     */
+    class TimeSpaceRenderer {
+      constructor(canvas, simulator) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.sim = simulator;
+        this.laneFilter = 'all'; // 'all' | '1' | '2'
+      }
+
+      _speedToColor(v) {
+        const ratio = Math.max(0, Math.min(1, v / 23.0));
+        const hue = ratio * 130;
+        return `hsl(${hue.toFixed(0)}, 85%, 52%)`;
+      }
+
+      draw() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = this.canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        if (this.canvas.width !== Math.floor(rect.width * dpr) || this.canvas.height !== Math.floor(rect.height * dpr)) {
+          this.canvas.width = Math.floor(rect.width * dpr);
+          this.canvas.height = Math.floor(rect.height * dpr);
+        }
+
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        const W = rect.width;
+        const H = rect.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const padL = 52;
+        const padR = 16;
+        const padT = 14;
+        const padB = 26;
+        const plotW = W - padL - padR;
+        const plotH = H - padT - padB;
+
+        const endT =
+          this.sim.isAllGoalsCompleted && this.sim.allCarsArrivalTime !== null
+            ? this.sim.allCarsArrivalTime
+            : this.sim.elapsedTime;
+        const maxT = Math.max(60, endT);
+        const minX = this.sim.minTrackX;
+        const maxX = this.sim.params.goalX;
+        const spanX = maxX - minX;
+
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#64748b';
+
+        for (let i = 0; i <= 4; i++) {
+          const y = padT + (plotH * i) / 4;
+          const xVal = maxX - (spanX * i) / 4;
+          ctx.beginPath();
+          ctx.moveTo(padL, y);
+          ctx.lineTo(padL + plotW, y);
+          ctx.stroke();
+          ctx.textAlign = 'right';
+          ctx.fillText(`${Math.round(xVal)}m`, padL - 6, y + 3);
+        }
+
+        const zeroY = padT + plotH * (1 - (0 - minX) / spanX);
+        ctx.strokeStyle = '#0e7490';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(padL, zeroY);
+        ctx.lineTo(padL + plotW, zeroY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        for (let i = 0; i <= 5; i++) {
+          const x = padL + (plotW * i) / 5;
+          const tVal = (maxT * i) / 5;
+          ctx.textAlign = 'center';
+          ctx.fillText(`${tVal.toFixed(0)}s`, x, H - 8);
+        }
+
+        ctx.lineWidth = 1.4;
+        const targetLaneNum = this.laneFilter === 'all' ? null : parseInt(this.laneFilter, 10);
+
+        for (const [, pts] of this.sim.trajectories.entries()) {
+          if (pts.length < 2) continue;
+          for (let i = 1; i < pts.length; i++) {
+            const p0 = pts[i - 1];
+            const p1 = pts[i];
+            if (p0.x > maxX) break;
+
+            let endX = p1.x;
+            let endTPoint = p1.t;
+            let reachedGoalLine = false;
+
+            if (p1.x > maxX) {
+              const ratio = p1.x !== p0.x ? (maxX - p0.x) / (p1.x - p0.x) : 0;
+              endX = maxX;
+              endTPoint = p0.t + (p1.t - p0.t) * ratio;
+              reachedGoalLine = true;
+            }
+
+            if (targetLaneNum === null || p1.lane === targetLaneNum) {
+              const x0 = padL + (p0.t / maxT) * plotW;
+              const y0 = padT + plotH * (1 - (p0.x - minX) / spanX);
+              const x1 = padL + (endTPoint / maxT) * plotW;
+              const y1 = padT + plotH * (1 - (endX - minX) / spanX);
+
+              ctx.strokeStyle = this._speedToColor(p1.v);
+              ctx.beginPath();
+              ctx.moveTo(x0, y0);
+              ctx.lineTo(x1, y1);
+              ctx.stroke();
+            }
+
+            if (reachedGoalLine) break;
+          }
+        }
+
+        ctx.restore();
+      }
+    }
+
+    /**
+     * ========================================================================
+     * 4. 時系列折れ線グラフレンダラー
+     * ========================================================================
+     */
+    class SeriesChartRenderer {
+      constructor(canvas, simulator, field, strokeColor, maxYDefault) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.sim = simulator;
+        this.field = field;
+        this.strokeColor = strokeColor;
+        this.maxYDefault = maxYDefault;
+      }
+
+      draw() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = this.canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        if (this.canvas.width !== Math.floor(rect.width * dpr) || this.canvas.height !== Math.floor(rect.height * dpr)) {
+          this.canvas.width = Math.floor(rect.width * dpr);
+          this.canvas.height = Math.floor(rect.height * dpr);
+        }
+
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        const W = rect.width;
+        const H = rect.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const padL = 40;
+        const padR = 12;
+        const padT = 10;
+        const padB = 22;
+        const plotW = W - padL - padR;
+        const plotH = H - padT - padB;
+
+        const data = this.sim.timeSeries;
+        let maxVal = this.maxYDefault;
+        for (const d of data) {
+          if (d[this.field] > maxVal) maxVal = Math.ceil(d[this.field] * 1.15);
+        }
+        const endT =
+          this.sim.isAllGoalsCompleted && this.sim.allCarsArrivalTime !== null
+            ? this.sim.allCarsArrivalTime
+            : this.sim.elapsedTime;
+        const maxT = Math.max(30, endT);
+
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 1;
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#64748b';
+
+        for (let i = 0; i <= 3; i++) {
+          const y = padT + (plotH * i) / 3;
+          const v = maxVal * (1 - i / 3);
+          ctx.beginPath();
+          ctx.moveTo(padL, y);
+          ctx.lineTo(padL + plotW, y);
+          ctx.stroke();
+          ctx.textAlign = 'right';
+          ctx.fillText(v.toFixed(1), padL - 5, y + 3);
+        }
+
+        for (let i = 0; i <= 4; i++) {
+          const x = padL + (plotW * i) / 4;
+          const t = (maxT * i) / 4;
+          ctx.textAlign = 'center';
+          ctx.fillText(`${t.toFixed(0)}s`, x, H - 6);
+        }
+
+        if (data.length >= 2) {
+          ctx.strokeStyle = this.strokeColor;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          for (let i = 0; i < data.length; i++) {
+            const px = padL + (data[i].t / maxT) * plotW;
+            const py = padT + plotH * (1 - data[i][this.field] / maxVal);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+    }
+
+    /**
+     * ========================================================================
+     * 5. アプリケーションUIバインディング & メインループ制御
+     * ========================================================================
+     */
+    window.addEventListener('DOMContentLoaded', () => {
+      const sim = new TrafficSimulator();
+
+      let isRunning = false;
+      let speedMultiplier = 10;
+      let activeTab = 'road';
+      let lastRenderedEventSeq = -1;
+      const experimentRecords = [];
+
+      const inputASlider = document.getElementById('inputASlider');
+      const inputANumber = document.getElementById('inputANumber');
+      const inputBSlider = document.getElementById('inputBSlider');
+      const inputBNumber = document.getElementById('inputBNumber');
+      const inputNoiseSlider = document.getElementById('inputNoiseSlider');
+      const inputNoiseNumber = document.getElementById('inputNoiseNumber');
+      const noiseAccelHint = document.getElementById('noiseAccelHint');
+      const inputN = document.getElementById('inputN');
+      const selectGoalX = document.getElementById('selectGoalX');
+      const selectEmergency = document.getElementById('selectEmergency');
+      const inputSeed = document.getElementById('inputSeed');
+      const checkboxLaneChange = document.getElementById('checkboxLaneChange');
+      const laneChangeToggleLabel = document.getElementById('laneChangeToggleLabel');
+
+      // 車両インスペクター更新
+      function updateInspectorUI(carId) {
+        const contentEl = document.getElementById('inspectorContent');
+        const clearBtn = document.getElementById('btnClearInspect');
+        if (!carId) {
+          contentEl.innerHTML =
+            '<span class="text-slate-400 font-sans">💡 道路上の車両にマウスを合わせるかクリックすると個体ステータス（ID・車線・位置・速度・加速度・累積停止時間）を表示します。</span>';
+          clearBtn.classList.add('hidden');
+          return;
+        }
+        const car = sim.cars.find((c) => c.id === carId);
+        if (!car) return;
+
+        clearBtn.classList.toggle('hidden', roadRenderer.selectedCarId === null);
+        const statusStr = car.hasReachedGoal
+          ? 'ゴール到達済(周回)'
+          : car.blinkerTimer > 0
+          ? `ウインカー(第${car.lane}→第${car.targetLane}, ${(car.blinkerTimer * sim.dt).toFixed(1)}s)`
+          : car.emergencyActive
+          ? '緊急ブレーキ'
+          : '通常走行';
+
+        contentEl.innerHTML = `
+          <span class="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold">車両 #${car.id}</span>
+          <span>車線: <strong class="text-slate-100">第${car.lane}車線</strong></span>
+          <span>位置 x: <strong class="text-slate-100">${car.x.toFixed(1)} m</strong></span>
+          <span>速度 v: <strong class="text-emerald-300">${car.v.toFixed(2)} m/s</strong></span>
+          <span>加速度 α: <strong class="text-amber-300">${car.a.toFixed(2)} m/s²</strong></span>
+          <span>停止累計: <strong class="text-orange-300">${car.stopTime.toFixed(2)} s</strong></span>
+          <span>状態: <strong class="text-cyan-300">${statusStr}</strong></span>
+        `;
+      }
+
+      document.getElementById('btnClearInspect').addEventListener('click', () => {
+        roadRenderer.selectedCarId = null;
+        updateInspectorUI(null);
+      });
+
+      const roadRenderer = new RoadCanvasRenderer(
+        document.getElementById('roadCanvas'),
+        sim,
+        updateInspectorUI
+      );
+      const timeSpaceRenderer = new TimeSpaceRenderer(
+        document.getElementById('timeSpaceCanvas'),
+        sim
+      );
+      const speedSeriesRenderer = new SeriesChartRenderer(
+        document.getElementById('speedSeriesCanvas'),
+        sim,
+        'avgSpeed',
+        '#38bdf8',
+        25
+      );
+      const stopSeriesRenderer = new SeriesChartRenderer(
+        document.getElementById('stopSeriesCanvas'),
+        sim,
+        'avgStop',
+        '#fbbf24',
+        10
+      );
+
+      function syncSliderTrackFill(slider, activeColor) {
+        const min = parseFloat(slider.min);
+        const max = parseFloat(slider.max);
+        const val = parseFloat(slider.value);
+        const pct = max > min ? ((val - min) / (max - min)) * 100 : 0;
+        slider.style.background = `linear-gradient(90deg, ${activeColor} 0%, ${activeColor} ${pct}%, #1e293b ${pct}%, #1e293b 100%)`;
+      }
+
+      function updatePlaybackUI() {
+        const badge = document.getElementById('simStatusBadge');
+        const icon = document.getElementById('playPauseIcon');
+        const text = document.getElementById('playPauseText');
+
+        if (isRunning) {
+          badge.textContent = '実行中';
+          badge.className = 'px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+          icon.textContent = '❚❚';
+          text.textContent = '一時停止';
+        } else {
+          badge.textContent = '一時停止中';
+          badge.className = 'px-2 py-0.5 text-[11px] font-semibold rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30';
+          icon.textContent = '▶';
+          text.textContent = '再生';
+        }
+      }
+
+      function updateMetricsUI() {
+        const m = sim.getMetrics();
+        document.getElementById('metricTime').textContent = `${sim.elapsedTime.toFixed(2)} s`;
+        document.getElementById('metricStep').textContent = `(${sim.stepCount} st)`;
+
+        document.getElementById('metricFlow').textContent = m.flowEfficiency.toFixed(4);
+        document.getElementById('metricAvgStop').textContent = m.avgStopTime.toFixed(2);
+        document.getElementById('metricTotalStop').textContent = m.totalStopTime.toFixed(2);
+        document.getElementById('metricCollisions').textContent = m.collisionCount;
+        document.getElementById('metricLaneChanges').textContent = m.laneChangeCount;
+        document.getElementById('metricLaneChangeBreakdown').textContent = `1→2:${m.laneChanges1to2} / 2→1:${m.laneChanges2to1}`;
+        document.getElementById('metricActiveCars').textContent = m.activeCars;
+        document.getElementById('metricTotalCars').textContent = `/ ${m.totalCars} 台`;
+
+        document.getElementById('kpiFinalBadge').classList.toggle('hidden', !m.isFinalized);
+        document.getElementById('loopIndicatorTag').classList.toggle('hidden', !m.isFinalized);
+
+        document.getElementById('detailSv').textContent = m.speedSumSv.toFixed(1);
+        document.getElementById('detailValidSteps').textContent = m.validStaySteps.toLocaleString();
+        document.getElementById('detailTime1100').textContent = m.time1100m !== null ? `${m.time1100m.toFixed(2)} s` : '--';
+        document.getElementById('detailTimeLead').textContent = m.leadArrivalTime !== null ? `${m.leadArrivalTime.toFixed(2)} s` : '--';
+        document.getElementById('detailTimeAll').textContent = m.allCarsArrivalTime !== null ? `${m.allCarsArrivalTime.toFixed(2)} s` : '--';
+
+        if (m.isFinalized && !sim.autoLogged) {
+          sim.autoLogged = true;
+          recordExperimentResult('全車到着確定');
+          showToast('全車両が到着点を通過しました（確定値を自動記録・周回描写を継続）', 'success');
+        }
+
+        updateEventTimelineUI(m);
+        const inspectId = roadRenderer.selectedCarId || roadRenderer.hoveredCarId;
+        if (inspectId) updateInspectorUI(inspectId);
+      }
+
+      function updateEventTimelineUI(metrics) {
+        if (sim.totalEventCounter === lastRenderedEventSeq) return;
+        lastRenderedEventSeq = sim.totalEventCounter;
+
+        document.getElementById('tabEventCount').textContent =
+          sim.totalEventCounter > 200 ? '200+' : sim.totalEventCounter;
+        document.getElementById('eventDirectionSummary').textContent =
+          `1→2: ${metrics.laneChanges1to2}回 / 2→1: ${metrics.laneChanges2to1}回`;
+        document.getElementById('eventCountBadge').textContent =
+          sim.totalEventCounter > 200
+            ? `最新 ${sim.eventLogs.length} 件 (累計 ${sim.totalEventCounter} 件)`
+            : `${sim.eventLogs.length} 件`;
+
+        const listEl = document.getElementById('eventLogList');
+        if (sim.eventLogs.length === 0) {
+          listEl.innerHTML =
+            '<div class="text-slate-500 text-center py-10 font-sans">ウインカー開始・車線変更完了（1→2 / 2→1）・キャンセル・衝突イベントが最新200件まで時系列で記録されます</div>';
+          return;
+        }
+
+        const badgeMap = {
+          blinker: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+          change: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+          cancel: 'bg-slate-800 text-slate-300 border-slate-700',
+          collision: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+        };
+        const labelMap = {
+          blinker: 'ウインカー',
+          change: '車線変更',
+          cancel: '取消',
+          collision: '衝突',
+        };
+
+        listEl.innerHTML = sim.eventLogs
+          .slice(0, 200)
+          .map(
+            (ev) => `
+            <div class="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800/80">
+              <span class="text-slate-500 w-14 shrink-0">[${ev.t}s]</span>
+              <span class="px-1.5 py-0.2 rounded border text-[10px] font-sans font-semibold shrink-0 ${badgeMap[ev.type] || ''}">${labelMap[ev.type] || ev.type}</span>
+              <span class="text-sky-300 font-bold shrink-0">#${ev.carId}</span>
+              <span class="text-slate-300 font-sans truncate">${ev.detail}</span>
+            </div>`
+          )
+          .join('');
+      }
+
+      function recordExperimentResult(label) {
+        const m = sim.getMetrics();
+        experimentRecords.unshift({
+          index: experimentRecords.length + 1,
+          label: `${label} (${sim.params.laneChangeEnabled ? 'LC有' : 'LC無'})`,
+          a: sim.params.a.toFixed(2),
+          b: sim.params.b,
+          N: sim.params.N,
+          leadRandomMultiplier: sim.params.leadRandomMultiplier.toFixed(2),
+          seed: sim.params.seed,
+          flow: m.flowEfficiency.toFixed(4),
+          avgStop: m.avgStopTime.toFixed(2),
+          collisions: m.collisionCount,
+          laneChangesText: `${m.laneChangeCount} (${m.laneChanges1to2}/${m.laneChanges2to1})`,
+          allTime: m.allCarsArrivalTime !== null ? m.allCarsArrivalTime.toFixed(2) : `${sim.elapsedTime.toFixed(1)}*`,
+        });
+        document.getElementById('tabRecordCount').textContent = experimentRecords.length;
+        renderExperimentTable();
+      }
+
+      function renderExperimentTable() {
+        const tbody = document.getElementById('experimentTableBody');
+        if (experimentRecords.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="12" class="py-10 text-center text-slate-500 font-sans">
+                全車が到着点を通過すると確定値が自動記録されます（右上の「+ 現在値を記録」で任意時点の記録も可能です）
+              </td>
+            </tr>`;
+          return;
+        }
+        tbody.innerHTML = experimentRecords
+          .map(
+            (r) => `
+            <tr class="hover:bg-slate-900/90 transition">
+              <td class="py-1.5 px-2.5 text-slate-400">${r.index}</td>
+              <td class="py-1.5 px-2.5 font-sans text-slate-200 whitespace-nowrap">${r.label}</td>
+              <td class="py-1.5 px-2">${r.a}</td>
+              <td class="py-1.5 px-2">${r.b}</td>
+              <td class="py-1.5 px-2">${r.N}</td>
+              <td class="py-1.5 px-2 text-amber-300">${r.leadRandomMultiplier}</td>
+              <td class="py-1.5 px-2 text-indigo-300">${r.seed}</td>
+              <td class="py-1.5 px-2 font-bold text-emerald-400">${r.flow}</td>
+              <td class="py-1.5 px-2 font-bold text-amber-400">${r.avgStop}</td>
+              <td class="py-1.5 px-2 font-bold text-rose-400">${r.collisions}</td>
+              <td class="py-1.5 px-2 font-bold text-sky-400">${r.laneChangesText}</td>
+              <td class="py-1.5 px-2 text-cyan-300">${r.allTime}</td>
+            </tr>`
+          )
+          .join('');
+      }
+
+      function redrawAllCanvases(blinkOn) {
+        if (activeTab === 'road') {
+          roadRenderer.draw(blinkOn);
+        } else if (activeTab === 'timespace') {
+          timeSpaceRenderer.draw();
+        } else if (activeTab === 'timeseries') {
+          speedSeriesRenderer.draw();
+          stopSeriesRenderer.draw();
+        }
+      }
+
+      function applyParamsFromUI(shouldReset = true) {
+        const aVal = Math.max(0.01, Math.min(10.0, parseFloat(inputANumber.value) || 0.8));
+        const bVal = Math.max(10, Math.min(200, parseInt(inputBNumber.value, 10) || 50));
+        const parsedNoise = parseFloat(inputNoiseNumber.value);
+        const noiseVal = Number.isFinite(parsedNoise) ? Math.max(0, Math.min(10.0, parsedNoise)) : 1.0;
+        const nVal = Math.max(4, Math.min(100, parseInt(inputN.value, 10) || 50));
+        const goalVal = parseInt(selectGoalX.value, 10) || 6664;
+        const emgVal = selectEmergency.value === 'true';
+        const seedVal = parseInt(inputSeed.value, 10) || 20260923;
+        const lcEnabled = checkboxLaneChange.checked;
+
+        inputANumber.value = aVal.toFixed(2);
+        inputASlider.value = Math.min(5.0, aVal).toFixed(2);
+        syncSliderTrackFill(inputASlider, '#38bdf8');
+
+        inputBNumber.value = bVal;
+        inputBSlider.value = bVal;
+        syncSliderTrackFill(inputBSlider, '#38bdf8');
+
+        inputNoiseNumber.value = noiseVal.toFixed(2);
+        inputNoiseSlider.value = Math.min(10.0, noiseVal).toFixed(2);
+        syncSliderTrackFill(inputNoiseSlider, '#fbbf24');
+        noiseAccelHint.textContent = noiseVal === 0 ? '定速 20m/s' : `±${(1.49 * noiseVal).toFixed(2)} m/s²`;
+
+        inputN.value = nVal;
+
+        sim.params.a = aVal;
+        sim.params.b = bVal;
+        sim.params.leadRandomMultiplier = noiseVal;
+        sim.params.N = nVal;
+        sim.params.goalX = goalVal;
+        sim.params.emergencyZone = emgVal;
+        sim.params.seed = seedVal;
+        sim.params.laneChangeEnabled = lcEnabled;
+
+        laneChangeToggleLabel.textContent = lcEnabled ? '車線変更 有効' : '車線変更 禁止';
+        laneChangeToggleLabel.className = lcEnabled ? 'text-emerald-300' : 'text-rose-300';
+
+        if (shouldReset) {
+          isRunning = false;
+          lastRenderedEventSeq = -1;
+          sim.reset();
+          document.getElementById('roadRangeTitle').textContent =
+            `2車線高速道路 (${sim.minTrackX.toLocaleString()}m 〜 ${goalVal.toLocaleString()}m / 7段折り返し)`;
+          updatePlaybackUI();
+          updateMetricsUI();
+          redrawAllCanvases(true);
+        }
+      }
+
+      // スライダー・数値入力の双方向連動
+      inputASlider.addEventListener('input', () => {
+        inputANumber.value = parseFloat(inputASlider.value).toFixed(2);
+        applyParamsFromUI(true);
+      });
+      inputANumber.addEventListener('change', () => applyParamsFromUI(true));
+
+      inputBSlider.addEventListener('input', () => {
+        inputBNumber.value = inputBSlider.value;
+        applyParamsFromUI(true);
+      });
+      inputBNumber.addEventListener('change', () => applyParamsFromUI(true));
+
+      inputNoiseSlider.addEventListener('input', () => {
+        inputNoiseNumber.value = parseFloat(inputNoiseSlider.value).toFixed(2);
+        applyParamsFromUI(true);
+      });
+      inputNoiseNumber.addEventListener('change', () => applyParamsFromUI(true));
+
+      inputN.addEventListener('change', () => applyParamsFromUI(true));
+      selectGoalX.addEventListener('change', () => applyParamsFromUI(true));
+      selectEmergency.addEventListener('change', () => applyParamsFromUI(false));
+      inputSeed.addEventListener('change', () => applyParamsFromUI(true));
+      checkboxLaneChange.addEventListener('change', () => applyParamsFromUI(false));
+
+      document.getElementById('btnRandomSeed').addEventListener('click', () => {
+        inputSeed.value = Math.floor(10000000 + Math.random() * 89999999);
+        applyParamsFromUI(true);
+      });
+
+      // 再生・停止・ステップ・リセット操作
+      document.getElementById('btnPlayPause').addEventListener('click', () => {
+        isRunning = !isRunning;
+        updatePlaybackUI();
+      });
+
+      document.getElementById('btnStep').addEventListener('click', () => {
+        isRunning = false;
+        updatePlaybackUI();
+        sim.step();
+        updateMetricsUI();
+        redrawAllCanvases(true);
+      });
+
+      document.getElementById('btnSameSeedReset').addEventListener('click', () => {
+        applyParamsFromUI(true);
+        showToast(`同シード (${sim.params.seed}) で初期配置へリセットしました`, 'info');
+      });
+
+      document.getElementById('btnNewSeedReset').addEventListener('click', () => {
+        inputSeed.value = Math.floor(10000000 + Math.random() * 89999999);
+        applyParamsFromUI(true);
+        isRunning = true;
+        updatePlaybackUI();
+        showToast(`新規シード (${sim.params.seed}) で実行を開始しました`, 'success');
+      });
+
+      // 再生速度切替
+      document.querySelectorAll('.speed-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sp = btn.dataset.speed;
+          speedMultiplier = sp === 'MAX' ? 'MAX' : parseInt(sp, 10);
+          document.querySelectorAll('.speed-btn').forEach((b) => {
+            b.className = 'speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold text-slate-400 hover:text-slate-200 transition cursor-pointer';
+          });
+          btn.className = 'speed-btn px-2 py-1 rounded-lg text-[11px] font-mono font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 transition cursor-pointer';
+        });
+      });
+
+      // タブ切替
+      document.querySelectorAll('.tab-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          activeTab = btn.dataset.tab;
+          document.querySelectorAll('.tab-btn').forEach((b) => {
+            b.className = 'tab-btn px-3 py-1.5 rounded-t-xl text-xs font-medium text-slate-400 hover:text-slate-200 cursor-pointer transition flex items-center gap-1.5';
+          });
+          btn.className = 'tab-btn px-3 py-1.5 rounded-t-xl text-xs font-bold bg-slate-900 text-sky-400 border-t border-x border-slate-800 -mb-px cursor-pointer transition flex items-center gap-1.5';
+
+          document.querySelectorAll('.tab-panel').forEach((panel) => panel.classList.add('hidden'));
+          document.getElementById(`panel-${activeTab}`).classList.remove('hidden');
+          redrawAllCanvases(true);
+        });
+      });
+
+      // 時空図車線フィルタ切替
+      document.querySelectorAll('.ts-lane-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          timeSpaceRenderer.laneFilter = btn.dataset.tsLane;
+          document.querySelectorAll('.ts-lane-btn').forEach((b) => {
+            b.className = 'ts-lane-btn px-2 py-0.5 rounded-lg font-semibold text-slate-400 hover:text-slate-200 cursor-pointer';
+          });
+          btn.className = 'ts-lane-btn px-2 py-0.5 rounded-lg font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 cursor-pointer';
+          timeSpaceRenderer.draw();
+        });
+      });
+
+      // 車線変更 JSエディタ操作
+      const jsEditor = document.getElementById('jsConditionEditor');
+      const jsErrorDisplay = document.getElementById('jsErrorDisplay');
+      const codeStatusIndicator = document.getElementById('codeStatusIndicator');
+
+      jsEditor.addEventListener('input', () => {
+        codeStatusIndicator.textContent = '● 未適用';
+        codeStatusIndicator.className = 'text-amber-400 font-sans font-semibold';
+      });
+
+      document.querySelectorAll('.arg-chip').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          const arg = chip.dataset.arg;
+          const start = jsEditor.selectionStart;
+          const end = jsEditor.selectionEnd;
+          jsEditor.value = jsEditor.value.substring(0, start) + arg + jsEditor.value.substring(end);
+          jsEditor.focus();
+          jsEditor.selectionStart = jsEditor.selectionEnd = start + arg.length;
+          codeStatusIndicator.textContent = '● 未適用';
+          codeStatusIndicator.className = 'text-amber-400 font-sans font-semibold';
+        });
+      });
+
+      document.getElementById('btnApplyCode').addEventListener('click', () => {
+        const res = sim.compileCondition(jsEditor.value);
+        if (res.ok) {
+          jsErrorDisplay.classList.add('hidden');
+          codeStatusIndicator.textContent = '✓ 適用済み';
+          codeStatusIndicator.className = 'text-emerald-400 font-sans font-semibold';
+          showToast('車線変更メリット判定コードを適用しました', 'success');
+        } else {
+          jsErrorDisplay.textContent = `Syntax / Runtime Error: ${res.error}`;
+          jsErrorDisplay.classList.remove('hidden');
+          codeStatusIndicator.textContent = '✕ エラー';
+          codeStatusIndicator.className = 'text-rose-400 font-sans font-semibold';
+          showToast('コードにエラーがあります', 'error');
+        }
+      });
+
+      document.getElementById('btnRestoreDefaultCode').addEventListener('click', () => {
+        jsEditor.value = DEFAULT_CONDITION_CODE;
+        sim.compileCondition(DEFAULT_CONDITION_CODE);
+        jsErrorDisplay.classList.add('hidden');
+        codeStatusIndicator.textContent = '✓ 適用済み';
+        codeStatusIndicator.className = 'text-emerald-400 font-sans font-semibold';
+        showToast('デフォルトの車線変更条件コードを復元しました', 'info');
+      });
+
+      // 実験結果レコード操作
+      document.getElementById('btnRecordNow').addEventListener('click', () => {
+        recordExperimentResult('手動記録');
+        showToast('現在の実験指標をレコードへ記録しました', 'success');
+      });
+
+      document.getElementById('btnCopyTSV').addEventListener('click', () => {
+        if (experimentRecords.length === 0) {
+          showToast('コピーする実験レコードがありません', 'error');
+          return;
+        }
+        const header = ['#', '設定', 'a', 'b', 'N', '乱数r', 'シード', 'フロー効率F', '平均停止[s]', '衝突', '変更(1→2/2→1)', '全車時間[s]'].join('\t');
+        const rows = experimentRecords.map((r) =>
+          [r.index, r.label, r.a, r.b, r.N, r.leadRandomMultiplier, r.seed, r.flow, r.avgStop, r.collisions, r.laneChangesText, r.allTime].join('\t')
+        );
+        const tsv = [header, ...rows].join('\n');
+
+        const ta = document.createElement('textarea');
+        ta.value = tsv;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Excel / スプレッドシート貼付用TSVをコピーしました', 'success');
+      });
+
+      document.getElementById('btnDownloadCSV').addEventListener('click', () => {
+        if (experimentRecords.length === 0) {
+          showToast('出力する実験レコードがありません', 'error');
+          return;
+        }
+        const header = ['#', '設定', 'a', 'b', 'N', '乱数r', 'シード', 'フロー効率F', '平均停止[s]', '衝突', '変更(1→2/2→1)', '全車時間[s]'].join(',');
+        const rows = experimentRecords.map((r) =>
+          [r.index, `"${r.label}"`, r.a, r.b, r.N, r.leadRandomMultiplier, r.seed, r.flow, r.avgStop, r.collisions, `"${r.laneChangesText}"`, r.allTime].join(',')
+        );
+        const csv = '\uFEFF' + [header, ...rows].join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `traffic_experiment_${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('CSVファイルをダウンロードしました', 'success');
+      });
+
+      document.getElementById('btnClearRecords').addEventListener('click', () => {
+        experimentRecords.length = 0;
+        document.getElementById('tabRecordCount').textContent = '0';
+        renderExperimentTable();
+        showToast('実験結果レコードをクリアしました', 'info');
+      });
+
+      window.addEventListener('resize', () => redrawAllCanvases(true));
+
+      // メインアニメーションループ
+      let lastFrameTime = performance.now();
+      let stepAccumulator = 0;
+
+      function animate(now) {
+        const dtReal = Math.min(0.1, (now - lastFrameTime) / 1000);
+        lastFrameTime = now;
+        const blinkOn = Math.floor(now / 260) % 2 === 0;
+
+        if (isRunning) {
+          if (speedMultiplier === 'MAX') {
+            for (let i = 0; i < 45; i++) {
+              sim.step();
+            }
+          } else {
+            const stepsPerSec = speedMultiplier / sim.dt;
+            stepAccumulator += dtReal * stepsPerSec;
+            const stepsToRun = Math.min(40, Math.floor(stepAccumulator));
+            stepAccumulator -= stepsToRun;
+            for (let i = 0; i < stepsToRun; i++) {
+              sim.step();
+            }
+          }
+          updateMetricsUI();
+        }
+
+        redrawAllCanvases(blinkOn);
+        requestAnimationFrame(animate);
+      }
+
+      applyParamsFromUI(true);
+      requestAnimationFrame(animate);
+    });
+  </script>
+</body>
+</html>
